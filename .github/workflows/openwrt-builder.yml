@@ -74,8 +74,8 @@ jobs:
       run: |
         cd openwrt
         ./scripts/feeds install -a
+        git clone --depth 1 https://github.com/nikkinikki-org/OpenWrt-nikki.git package/nikki
         git clone --depth 1 https://github.com/immortalwrt/homeproxy.git package/homeproxy
-        ./scripts/feeds install homeproxy 2>/dev/null || true
 
     - name: Update Golang
       run: |
