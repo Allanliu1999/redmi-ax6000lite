@@ -112,10 +112,10 @@ jobs:
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
-        make -j$(nproc) V=s 2> /dev/null || make -j1 V=s 2> /dev/null
+        make -j$(nproc) || make -j1 || make -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
-        DEVICE=$(grep 'xiaomi_redmi-router-ax6000-ubootmod' .config | grep '=y' | sed -r 's/.*DEVICE_(.*)=y/\1/')
-        echo "DEVICE_NAME=_${DEVICE}" >> $GITHUB_ENV
+        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
     - name: Check space usage
@@ -129,52 +129,13 @@ jobs:
         name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: openwrt/bin
 
-    - name: Get next version
-      id: version
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        LATEST_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2> /dev/null || echo "redmi_ax6000_v0")
-        echo "最新 release tag: $LATEST_TAG"
-        LATEST_NUM=$(echo "$LATEST_TAG" | grep -oP 'v\K\d+' || echo "0")
-        echo "最新版本数字: $LATEST_NUM"
-        NEXT_NUM=$((LATEST_NUM + 1))
-        VERSION_TAG="redmi_ax6000_v${NEXT_NUM}"
-        echo "当前生成版本: $VERSION_TAG"
-        echo "release_tag=${VERSION_TAG}" >> $GITHUB_OUTPUT
-        echo "VERSION_TAG=${VERSION_TAG}" >> $GITHUB_ENV
-        echo "VERSION_NUM=v${NEXT_NUM}" >> $GITHUB_ENV
-
     - name: Organize files
       id: organize
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true'
       run: |
-        TARGET_DIR="openwrt/bin/targets"
-        if [ ! -d "$TARGET_DIR" ] || [ -z "$(ls -A $TARGET_DIR/*/* 2>/dev/null)" ]; then
-          echo "错误：固件目录不存在或为空"
-          exit 1
-        fi
         cd openwrt/bin/targets/*/*
-        VERSION_NUM="${{ env.VERSION_NUM }}"
-        DATE_TAG=$(date +"%Y%m%d")
-        KEPT_FILE=""
-        for f in *; do
-          if [ -f "$f" ]; then
-            if echo "$f" | grep -q 'sysupgrade.bin'; then
-              NEW_NAME=$(echo "$f" | sed "s/squashfs-sysupgrade\.bin/squashfs-sysupgrade-${VERSION_NUM}-${DATE_TAG}.bin/")
-              mv "$f" "$NEW_NAME"
-              echo "固件保留: $NEW_NAME"
-              KEPT_FILE="$NEW_NAME"
-            else
-              rm -f "$f"
-            fi
-          fi
-        done
-        ls -lh *.bin 2> /dev/null
-        rm -rf packages 2> /dev/null
+        rm -rf packages
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-        echo "KEPT_FILE=${KEPT_FILE}" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware directory
@@ -186,57 +147,35 @@ jobs:
 
     - name: Generate release info
       id: tag
-      if: steps.organize.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
       run: |
-        VERSION_TAG="${{ env.VERSION_TAG }}"
-        KEPT_FILE="${{ env.KEPT_FILE }}"
-        FIRMWARE_DIR="${{ env.FIRMWARE }}"
-        FW_FILE_INFO=""
-        if [ -n "$KEPT_FILE" ] && [ -f "${FIRMWARE_DIR}/${KEPT_FILE}" ]; then
-          FW_SIZE=$(ls -lh "${FIRMWARE_DIR}/${KEPT_FILE}" | awk '{print $5}')
-          FW_FILE_INFO="  - ${KEPT_FILE} (${FW_SIZE})"
-        fi
-        PREV_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2> /dev/null || echo "")
-        if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" != "$VERSION_TAG" ]; then
-          CHANGELOG=$(git log --oneline --no-decorate "$PREV_TAG"..HEAD 2> /dev/null || echo "  - 首次发布")
-        else
-          CHANGELOG="  - 首次发布"
-        fi
-        {
-          echo "## 🚀 Redmi AX6000 固件发布"
-          echo ""
-          echo "**版本号：** ${VERSION_TAG}"
-          echo "**固件名：** ${KEPT_FILE}"
-          echo "**发布日期：** $(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M')"
-          echo "**源码分支：** openwrt-24.10-6.6"
-          echo ""
-          echo "### 🔄 版本更新内容"
-          echo "${CHANGELOG}"
-          echo ""
-          echo "### 📦 固件文件"
-          echo "${FW_FILE_INFO:-  *(未找到固件文件)}"
-          echo ""
-          echo "### 🔧 包含插件"
-          echo "- luci-app-nikki (Mihomo 代理)"
-          echo "- luci-app-homeproxy"
-          echo "- luci-app-turboacc-mtk (硬件加速)"
-          echo "- luci-app-mtwifi-cfg (闭源WiFi管理)"
-          echo "- luci-app-eqos-mtk (设备限速)"
-          echo ""
-          echo "### 🇨🇳 国内 opkg 源已配置"
-          echo "刷机后可直接运行："
-          echo '```'
-          echo "opkg update && opkg upgrade"
-          echo '```'
-          echo ""
-          echo "### 📝 说明"
-          echo "- 基于 ImmortalWrt 24.10 闭源驱动"
-          echo "- 分区类型：ubootmod"
-          echo "- 使用 GitHub Actions 自动编译"
-          echo "- 刷机前请备份配置"
-        } > release.txt
+        VERSION="redmi_ax6000_v$(date +"%s")"
+        echo "release_tag=${VERSION}" >> $GITHUB_OUTPUT
+        
+        cat > release.txt << EOF
+        ## 🚀 Redmi AX6000 固件发布
+        
+        版本号： ${VERSION}
+        发布日期： $(TZ='Asia/Shanghai' date +"%Y-%m-%d %H:%M")
+        源码分支： openwrt-24.10-6.6
+        
+        ### 🔧 包含插件
+        - luci-app-nikki (Mihomo 代理)
+        - luci-app-homeproxy
+        - luci-app-turboacc-mtk (硬件加速)
+        - luci-app-mtwifi-cfg (闭源WiFi管理)
+        - luci-app-eqos-mtk (设备限速)
+        
+        ### 🇨🇳 国内 opkg 源已配置
+        刷机后可直接运行：
+        opkg update && opkg upgrade
+        
+        ### 📝 说明
+        - 基于 ImmortalWrt 24.10 闭源驱动
+        - 分区类型：ubootmod
+        - 使用 GitHub Actions 自动编译
+        - 刷机前请备份配置
+        EOF
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware to release
@@ -245,7 +184,7 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: ${{ steps.version.outputs.release_tag }}
+        tag_name: ${{ steps.tag.outputs.release_tag }}
         body_path: release.txt
         files: ${{ env.FIRMWARE }}/*
 
