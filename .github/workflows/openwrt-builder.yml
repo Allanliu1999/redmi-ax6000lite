@@ -207,10 +207,10 @@ jobs:
         {
           echo "## 🚀 Redmi AX6000 固件发布"
           echo ""
-          echo "版本号： ${VERSION_TAG}"
-          echo "固件名： ${KEPT_FILE}"
-          echo "发布日期： $(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M')"
-          echo "源码分支： openwrt-24.10-6.6"
+          echo "**版本号：** ${VERSION_TAG}"
+          echo "**固件名：** ${KEPT_FILE}"
+          echo "**发布日期：** $(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M')"
+          echo "**源码分支：** openwrt-24.10-6.6"
           echo ""
           echo "### 🔄 版本更新内容"
           echo "${CHANGELOG}"
@@ -227,7 +227,9 @@ jobs:
           echo ""
           echo "### 🇨🇳 国内 opkg 源已配置"
           echo "刷机后可直接运行："
+          echo '```'
           echo "opkg update && opkg upgrade"
+          echo '```'
           echo ""
           echo "### 📝 说明"
           echo "- 基于 ImmortalWrt 24.10 闭源驱动"
