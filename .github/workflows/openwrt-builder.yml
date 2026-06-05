@@ -130,29 +130,76 @@ jobs:
         name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: openwrt/bin
 
+    # ================================================================
+    # 📌 版本号计算规则（关键逻辑）
+    # 基于 GitHub Releases 中已成功发布的标签计算下一个版本号
+    # 第1次运行（无 Release）→ v1
+    # 第2次运行（已有 v1）  → v2
+    # 以此类推...
+    # Release 失败不会浪费版本号（失败的不计入 Release 列表）
+    # ================================================================
+    - name: Get next version
+      id: version
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        # 查询最新 release 标签，如果没有任何 release 则从 v0 开始（+1 后为 v1）
+        LATEST_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || echo "redmi_ax6000_v0")
+        echo "最新 release tag: $LATEST_TAG"
+        
+        # 提取数字部分（v1 → 1, v0 → 0）
+        LATEST_NUM=$(echo "$LATEST_TAG" | grep -oP 'v\K\d+' || echo "0")
+        echo "最新版本数字: $LATEST_NUM"
+        
+        # 计算下一个版本号
+        NEXT_NUM=$((LATEST_NUM + 1))
+        VERSION_TAG="redmi_ax6000_v${NEXT_NUM}"
+        echo "当前生成版本: $VERSION_TAG"
+        
+        # 存入环境变量供后续步骤使用
+        echo "release_tag=${VERSION_TAG}" >> $GITHUB_OUTPUT
+        echo "VERSION_TAG=${VERSION_TAG}" >> $GITHUB_ENV
+        echo "VERSION_NUM=v${NEXT_NUM}" >> $GITHUB_ENV
+
+    # ================================================================
+    # 📦 整理固件文件
+    # 只保留 sysupgrade.bin 固件，删除其他所有无用文件
+    # 重命名固件：追加版本号和日期，与 Release tag 保持一致
+    # ================================================================
     - name: Organize files
       id: organize
       if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
       run: |
         cd openwrt/bin/targets/*/*
         
-        # 重命名固件文件：追加版本号和日期
-        VERSION="v${{ github.run_number }}"
+        VERSION_NUM="${{ env.VERSION_NUM }}"
         DATE_TAG=$(date +"%Y%m%d")
-        for f in *sysupgrade.bin; do
+        KEPT_FILE=""
+        
+        # 只保留 sysupgrade 固件，删除其他所有文件
+        for f in *; do
           if [ -f "$f" ]; then
-            NEW_NAME=$(echo "$f" | sed "s/squashfs-sysupgrade\.bin/squashfs-sysupgrade-${VERSION}-${DATE_TAG}.bin/")
-            mv "$f" "$NEW_NAME"
-            echo "✅ 重命名: $f → $NEW_NAME"
+            if echo "$f" | grep -q 'sysupgrade.bin'; then
+              # 重命名：如 immortalwrt-...-ubootmod-squashfs-sysupgrade-v1-20260605.bin
+              NEW_NAME=$(echo "$f" | sed "s/squashfs-sysupgrade\.bin/squashfs-sysupgrade-${VERSION_NUM}-${DATE_TAG}.bin/")
+              mv "$f" "$NEW_NAME"
+              echo "✅ 固件保留: $NEW_NAME"
+              KEPT_FILE="$NEW_NAME"
+            else
+              rm -f "$f"
+              echo "🗑️ 删除: $f"
+            fi
           fi
         done
         
-        # 列出所有固件文件
-        echo "=== 固件文件列表 ==="
-        ls -lh *.bin 2>/dev/null || echo "无固件文件"
+        # 列出最终保留的固件文件
+        echo "=== 最终固件文件 ==="
+        ls -lh *.bin 2>/dev/null || echo "⚠️ 未找到固件文件"
         
-        rm -rf packages
+        rm -rf packages 2>/dev/null
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+        echo "KEPT_FILE=${KEPT_FILE}" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware directory
@@ -162,51 +209,50 @@ jobs:
         name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}
 
-    - name: Get next version
-      id: version
+    # ================================================================
+    # 📝 生成 Release 信息
+    # 包含版本号、固件名、自动更新日志、插件列表等
+    # ================================================================
+    - name: Generate release info
+      id: tag
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        # 获取最新 release 的版本号，如果获取失败则从 v1 开始
-        LATEST_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || echo "redmi_ax6000_v0")
-        echo "最新 release tag: $LATEST_TAG"
+        VERSION_TAG="${{ env.VERSION_TAG }}"
+        VERSION_NUM="${{ env.VERSION_NUM }}"
+        KEPT_FILE="${{ env.KEPT_FILE }}"
         
-        # 提取数字部分
-        LATEST_NUM=$(echo "$LATEST_TAG" | grep -oP 'v\K\d+' || echo "0")
-        echo "最新版本号: $LATEST_NUM"
-        
-        # 计算下一个版本号
-        NEXT_NUM=$((LATEST_NUM + 1))
-        VERSION="redmi_ax6000_v${NEXT_NUM}"
-        echo "当前版本号: $VERSION"
-        
-        echo "release_tag=${VERSION}" >> $GITHUB_OUTPUT
-        echo "VERSION_NUM=${NEXT_NUM}" >> $GITHUB_ENV
-
-    - name: Generate release info
-      id: tag
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
-      run: |
-        VERSION="${{ steps.version.outputs.release_tag }}"
-        
-        # 获取固件文件名列表
+        # 获取固件文件大小
         FIRMWARE_DIR="${{ env.FIRMWARE }}"
-        FW_FILES=""
-        if [ -d "$FIRMWARE_DIR" ]; then
-          FW_FILES=$(ls -lh "$FIRMWARE_DIR" 2>/dev/null | grep -v "^total" | awk '{print "  - " $NF " (" $5 ")"}')
+        FW_FILE_INFO=""
+        if [ -n "$KEPT_FILE" ] && [ -f "${FIRMWARE_DIR}/${KEPT_FILE}" ]; then
+          FW_SIZE=$(ls -lh "${FIRMWARE_DIR}/${KEPT_FILE}" | awk '{print $5}')
+          FW_FILE_INFO="  - ${KEPT_FILE} (${FW_SIZE})"
+        fi
+        
+        # 获取更新日志：从上一次 Release 到现在的提交记录
+        PREV_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || echo "")
+        if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" != "$VERSION_TAG" ]; then
+          CHANGELOG=$(git log --oneline --no-decorate "$PREV_TAG"..HEAD 2>/dev/null || echo "  - 首次发布")
+        else
+          CHANGELOG="  - 首次发布"
         fi
         
         # 写入 Release 正文
         cat > release.txt << EOF
         ## 🚀 Redmi AX6000 固件发布
         
-        **版本号：** ${VERSION}
+        **版本号：** ${VERSION_TAG}
+        **固件名：** ${KEPT_FILE}
         **发布日期：** $(TZ='Asia/Shanghai' date +"%Y-%m-%d %H:%M")
         **源码分支：** openwrt-24.10-6.6
         
+        ### 🔄 版本更新内容
+        ${CHANGELOG}
+        
         ### 📦 固件文件
-        ${FW_FILES:-  *(编译完成后自动列出)}
+        ${FW_FILE_INFO:-  *(未找到固件文件)}
         
         ### 🔧 包含插件
         - luci-app-nikki (Mihomo 代理)
@@ -217,12 +263,17 @@ jobs:
         
         ### 📝 说明
         - 基于 ImmortalWrt 24.10 闭源驱动
+        - 分区类型：ubootmod
         - 使用 GitHub Actions 自动编译
         - 刷机前请备份配置
         EOF
         
         echo "status=success" >> $GITHUB_OUTPUT
 
+    # ================================================================
+    # ⬆️ 上传固件到 Release
+    # Release tag = redmi_ax6000_v1（基于已有 Release +1）
+    # ================================================================
     - name: Upload firmware to release
       uses: softprops/action-gh-release@master
       if: steps.tag.outputs.status == 'success' && !cancelled()
