@@ -95,36 +95,14 @@ jobs:
         [ -e files ] && mv files openwrt/files
         [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
         
-        # ================================================================
-        # 🇨🇳 配置国内 opkg 源（清华源 + 中科大源）
-        # 刷机后可用 opkg update && opkg upgrade 在线更新插件
-        # ================================================================
+        # 配置国内 opkg 源（只创建 customfeeds.conf，不覆盖 distfeeds.conf）
         mkdir -p openwrt/files/etc/opkg
-        
         cat > openwrt/files/etc/opkg/customfeeds.conf << 'OPKGEOF'
-        # 清华镜像源（ImmortalWrt 24.10）
-        src/gz immortalwrt_base https://mirrors.tuna.tsinghua.edu.cn/immortalwrt/24.10/mediatek/mt7986/base
-        src/gz immortalwrt_luci https://mirrors.tuna.tsinghua.edu.cn/immortalwrt/24.10/mediatek/mt7986/luci
-        src/gz immortalwrt_packages https://mirrors.tuna.tsinghua.edu.cn/immortalwrt/24.10/mediatek/mt7986/packages
-        src/gz immortalwrt_target https://mirrors.tuna.tsinghua.edu.cn/immortalwrt/24.10/mediatek/mt7986/targets
-        
-        # 中科大镜像源（备选）
-        src/gz immortalwrt_base_ustc https://mirrors.ustc.edu.cn/immortalwrt/24.10/mediatek/mt7986/base
-        src/gz immortalwrt_luci_ustc https://mirrors.ustc.edu.cn/immortalwrt/24.10/mediatek/mt7986/luci
-        src/gz immortalwrt_packages_ustc https://mirrors.ustc.edu.cn/immortalwrt/24.10/mediatek/mt7986/packages
-        src/gz immortalwrt_target_ustc https://mirrors.ustc.edu.cn/immortalwrt/24.10/mediatek/mt7986/targets
-        OPKGEOF
-        
-        # 创建 opkg 配置，将 distfeeds.conf 指向国内源（覆盖默认的国外源）
-        mkdir -p openwrt/files/etc
-        cat > openwrt/files/etc/opkg/distfeeds.conf << 'OPKGEOF'
-        src/gz immortalwrt_base https://mirrors.tuna.tsinghua.edu.cn/immortalwrt/24.10/mediatek/mt7986/base
-        src/gz immortalwrt_luci https://mirrors.tuna.tsinghua.edu.cn/immortalwrt/24.10/mediatek/mt7986/luci
-        src/gz immortalwrt_packages https://mirrors.tuna.tsinghua.edu.cn/immortalwrt/24.10/mediatek/mt7986/packages
-        src/gz immortalwrt_target https://mirrors.tuna.tsinghua.edu.cn/immortalwrt/24.10/mediatek/mt7986/targets
-        OPKGEOF
-        
-        echo "✅ 已配置国内 opkg 源（清华镜像）"
+src/gz immortalwrt_base https://mirrors.tuna.tsinghua.edu.cn/immortalwrt/24.10/mediatek/mt7986/base
+src/gz immortalwrt_luci https://mirrors.tuna.tsinghua.edu.cn/immortalwrt/24.10/mediatek/mt7986/luci
+src/gz immortalwrt_packages https://mirrors.tuna.tsinghua.edu.cn/immortalwrt/24.10/mediatek/mt7986/packages
+src/gz immortalwrt_target https://mirrors.tuna.tsinghua.edu.cn/immortalwrt/24.10/mediatek/mt7986/targets
+OPKGEOF
         
         chmod +x $DIY_P2_SH
         cd openwrt
@@ -144,7 +122,7 @@ jobs:
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
-        make -j$(nproc) || make -j1 || make -j1 V=s
+        make -j$(nproc) V=s 2>&1 || make -j1 V=s 2>&1
         echo "status=success" >> $GITHUB_OUTPUT
         DEVICE=$(grep 'xiaomi_redmi-router-ax6000-ubootmod' .config | grep '=y' | sed -r 's/.*DEVICE_(.*)=y/\1/')
         echo "DEVICE_NAME=_${DEVICE}" >> $GITHUB_ENV
@@ -161,9 +139,6 @@ jobs:
         name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: openwrt/bin
 
-    # ================================================================
-    # 📌 版本号计算
-    # ================================================================
     - name: Get next version
       id: version
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
@@ -181,9 +156,6 @@ jobs:
         echo "VERSION_TAG=${VERSION_TAG}" >> $GITHUB_ENV
         echo "VERSION_NUM=v${NEXT_NUM}" >> $GITHUB_ENV
 
-    # ================================================================
-    # 📦 整理固件文件（只保留一个 sysupgrade）
-    # ================================================================
     - name: Organize files
       id: organize
       if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
@@ -199,11 +171,10 @@ jobs:
             if echo "$f" | grep -q 'sysupgrade.bin'; then
               NEW_NAME=$(echo "$f" | sed "s/squashfs-sysupgrade\.bin/squashfs-sysupgrade-${VERSION_NUM}-${DATE_TAG}.bin/")
               mv "$f" "$NEW_NAME"
-              echo "✅ 固件保留: $NEW_NAME"
+              echo "固件保留: $NEW_NAME"
               KEPT_FILE="$NEW_NAME"
             else
               rm -f "$f"
-              echo "🗑️ 删除: $f"
             fi
           fi
         done
@@ -221,9 +192,6 @@ jobs:
         name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}
 
-    # ================================================================
-    # 📝 生成 Release 信息
-    # ================================================================
     - name: Generate release info
       id: tag
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
@@ -231,7 +199,12 @@ jobs:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         VERSION_TAG="${{ env.VERSION_TAG }}"
+        VERSION_NUM="${{ env.VERSION_NUM }}"
         KEPT_FILE="${{ env.KEPT_FILE }}"
+        DATE_TAG=$(date +"%Y%m%d")
+        
+        # Release 标题 = 版本号 + 固件后缀
+        RELEASE_NAME="${VERSION_TAG}-${KEPT_FILE}"
         
         FIRMWARE_DIR="${{ env.FIRMWARE }}"
         FW_FILE_INFO=""
@@ -248,38 +221,36 @@ jobs:
         fi
         
         cat > release.txt << EOF
-        ## 🚀 Redmi AX6000 固件发布
-        
-        **版本号：** ${VERSION_TAG}
-        **固件名：** ${KEPT_FILE}
-        **发布日期：** $(TZ='Asia/Shanghai' date +"%Y-%m-%d %H:%M")
-        **源码分支：** openwrt-24.10-6.6
-        
-        ### 🔄 版本更新内容
-        ${CHANGELOG}
-        
-        ### 📦 固件文件
-        ${FW_FILE_INFO:-  *(未找到固件文件)}
-        
-        ### 🔧 包含插件
-        - luci-app-nikki (Mihomo 代理)
-        - luci-app-homeproxy
-        - luci-app-turboacc-mtk (硬件加速)
-        - luci-app-mtwifi-cfg (闭源WiFi管理)
-        - luci-app-eqos-mtk (设备限速)
-        
-        ### 🇨🇳 国内 opkg 源已配置
-        刷机后可直接运行以下命令在线更新插件：
-        \`\`\`
-        opkg update && opkg upgrade
-        \`\`\`
-        
-        ### 📝 说明
-        - 基于 ImmortalWrt 24.10 闭源驱动
-        - 分区类型：ubootmod
-        - 使用 GitHub Actions 自动编译
-        - 刷机前请备份配置
-        EOF
+## 🚀 Redmi AX6000 固件发布
+
+版本号： ${VERSION_TAG}
+固件名： ${KEPT_FILE}
+发布日期： $(TZ='Asia/Shanghai' date +"%Y-%m-%d %H:%M")
+源码分支： openwrt-24.10-6.6
+
+### 🔄 版本更新内容
+${CHANGELOG}
+
+### 📦 固件文件
+${FW_FILE_INFO:-  *(未找到固件文件)}
+
+### 🔧 包含插件
+- luci-app-nikki (Mihomo 代理)
+- luci-app-homeproxy
+- luci-app-turboacc-mtk (硬件加速)
+- luci-app-mtwifi-cfg (闭源WiFi管理)
+- luci-app-eqos-mtk (设备限速)
+
+### 🇨🇳 国内 opkg 源已配置
+刷机后可直接运行：
+opkg update && opkg upgrade
+
+### 📝 说明
+- 基于 ImmortalWrt 24.10 闭源驱动
+- 分区类型：ubootmod
+- 使用 GitHub Actions 自动编译
+- 刷机前请备份配置
+EOF
         
         echo "status=success" >> $GITHUB_OUTPUT
 
@@ -290,22 +261,12 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: ${{ steps.version.outputs.release_tag }}
+        name: ${{ steps.version.outputs.release_tag }}-${{ env.KEPT_FILE }}
         body_path: release.txt
         files: ${{ env.FIRMWARE }}/*
 
-    # ---- 删除旧的 workflow 运行记录（保留30天，至少保留5次） ----
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@main
       with:
         retain_days: 30
         keep_minimum_runs: 5
-
-    # ---- 注释掉：不再自动删除旧的 Release ----
-    # - name: Remove old Releases
-    #   uses: dev-drprasad/delete-older-releases@master
-    #   if: env.UPLOAD_RELEASE == 'true' && !cancelled()
-    #   with:
-    #     keep_latest: 3
-    #     delete_tags: true
-    #   env:
-    #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
