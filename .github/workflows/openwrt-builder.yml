@@ -38,6 +38,8 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
+        sudo swapoff -a 2>/dev/null || true
+        sudo rm -f /swapfile 2>/dev/null || true
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         sudo docker image prune --all --force
         sudo -E apt-get -qq update
@@ -68,8 +70,12 @@ jobs:
     - name: Update feeds
       run: cd openwrt && ./scripts/feeds update -a
 
-    - name: Install feeds
-      run: cd openwrt && ./scripts/feeds install -a
+    - name: Install feeds and custom packages
+      run: |
+        cd openwrt
+        ./scripts/feeds install -a
+        git clone --depth 1 https://github.com/immortalwrt/homeproxy.git package/homeproxy
+        ./scripts/feeds install homeproxy 2>/dev/null || true
 
     - name: Update Golang
       run: |
@@ -125,7 +131,7 @@ jobs:
 
     - name: Get next version
       id: version
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
@@ -142,8 +148,13 @@ jobs:
 
     - name: Organize files
       id: organize
-      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true'
       run: |
+        TARGET_DIR="openwrt/bin/targets"
+        if [ ! -d "$TARGET_DIR" ] || [ -z "$(ls -A $TARGET_DIR/*/* 2>/dev/null)" ]; then
+          echo "错误：固件目录不存在或为空"
+          exit 1
+        fi
         cd openwrt/bin/targets/*/*
         VERSION_NUM="${{ env.VERSION_NUM }}"
         DATE_TAG=$(date +"%Y%m%d")
@@ -168,14 +179,14 @@ jobs:
 
     - name: Upload firmware directory
       uses: actions/upload-artifact@main
-      if: steps.organize.outputs.status == 'success' && !cancelled()
+      if: steps.organize.outputs.status == 'success'
       with:
         name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}
 
     - name: Generate release info
       id: tag
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      if: steps.organize.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
@@ -228,7 +239,7 @@ jobs:
 
     - name: Upload firmware to release
       uses: softprops/action-gh-release@master
-      if: steps.tag.outputs.status == 'success' && !cancelled()
+      if: steps.tag.outputs.status == 'success'
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
