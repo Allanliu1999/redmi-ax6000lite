@@ -1,8 +1,10 @@
-src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main
-src-git passwall_luci https://github.com/Openwrt-Passwall/openwrt-passwall.git;main
-src-git packages https://github.com/immortalwrt/packages.git;openwrt-24.10
-src-git luci https://github.com/immortalwrt/luci.git;openwrt-24.10
-src-git routing https://github.com/openwrt/routing.git;openwrt-24.10
-src-git telephony https://github.com/openwrt/telephony.git;openwrt-24.10
+src-git packages https://git.immortalwrt.org/immortalwrt/packages.git^openwrt-24.10
+src-git luci https://git.immortalwrt.org/immortalwrt/luci.git^openwrt-24.10
+src-git routing https://git.immortalwrt.org/routing.git^openwrt-24.10
+src-git telephony https://git.immortalwrt.org/telephony.git^openwrt-24.10
+src-git targets https://git.immortalwrt.org/immortalwrt/targets.git^openwrt-24.10
+src-git management https://git.immortalwrt.org/immortalwrt/management.git^openwrt-24.10
+src-git oldpackages https://git.immortalwrt.org/immortalwrt/packages.git^openwrt-23.05
+src-git immortalwrt https://git.immortalwrt.org/immortalwrt/immortalwrt.git^openwrt-24.10
 src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git
 src-git homeproxy https://github.com/immortalwrt/homeproxy.git
