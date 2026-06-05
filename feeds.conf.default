@@ -6,4 +6,3 @@ src-git targets https://git.immortalwrt.org/immortalwrt/targets.git^openwrt-24.1
 src-git management https://git.immortalwrt.org/immortalwrt/management.git^openwrt-24.10
 src-git oldpackages https://git.immortalwrt.org/immortalwrt/packages.git^openwrt-23.05
 src-git immortalwrt https://git.immortalwrt.org/immortalwrt/immortalwrt.git^openwrt-24.10
-src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git
