@@ -131,6 +131,18 @@ jobs:
       if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
       run: |
         cd openwrt/bin/targets/*/*
+        
+        # 重命名固件文件：追加版本号和日期
+        VERSION="v${{ github.run_number }}"
+        DATE_TAG=$(date +"%Y%m%d")
+        for f in *sysupgrade.bin; do
+          if [ -f "$f" ]; then
+            NEW_NAME=$(echo "$f" | sed "s/squashfs-sysupgrade\.bin/squashfs-sysupgrade-${VERSION}-${DATE_TAG}.bin/")
+            mv "$f" "$NEW_NAME"
+            echo "✅ 重命名: $f → $NEW_NAME"
+          fi
+        done
+        
         rm -rf packages
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
@@ -146,8 +158,41 @@ jobs:
       id: tag
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
-        echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
-        touch release.txt
+        # 版本号：使用 GitHub Actions 运行序号自动递增 (v1, v2, v3...)
+        VERSION="redmi_ax6000_v${{ github.run_number }}"
+        echo "release_tag=${VERSION}" >> $GITHUB_OUTPUT
+        
+        # 获取固件文件名列表
+        FIRMWARE_DIR="${{ env.FIRMWARE }}"
+        FW_FILES=""
+        if [ -d "$FIRMWARE_DIR" ]; then
+          FW_FILES=$(ls -lh "$FIRMWARE_DIR" 2>/dev/null | grep -v "^total" | awk '{print "  - " $NF " (" $5 ")"}')
+        fi
+        
+        # 写入 Release 正文
+        cat > release.txt << EOF
+        ## 🚀 Redmi AX6000 固件发布
+        
+        **版本号：** ${VERSION}
+        **发布日期：** $(TZ='Asia/Shanghai' date +"%Y-%m-%d %H:%M")
+        **源码分支：** openwrt-24.10-6.6
+        
+        ### 📦 固件文件
+        ${FW_FILES:-  *(编译完成后自动列出)}
+        
+        ### 🔧 包含插件
+        - luci-app-nikki (Mihomo 代理)
+        - luci-app-homeproxy
+        - luci-app-turboacc-mtk (硬件加速)
+        - luci-app-mtwifi-cfg (闭源WiFi管理)
+        - luci-app-eqos-mtk (设备限速)
+        
+        ### 📝 说明
+        - 基于 ImmortalWrt 24.10 闭源驱动
+        - 使用 GitHub Actions 自动编译
+        - 刷机前请备份配置
+        EOF
+        
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware to release
