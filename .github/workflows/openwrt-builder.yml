@@ -103,12 +103,19 @@ jobs:
       run: |
         cd openwrt
         make defconfig
-        # 强制禁用 initramfs 生成（make defconfig 会恢复默认值，需要手动覆盖）
-        sed -i 's/CONFIG_TARGET_ROOTFS_INITRAMFS=y/CONFIG_TARGET_ROOTFS_INITRAMFS=n/g' .config
-        grep 'CONFIG_TARGET_ROOTFS_INITRAMFS' .config
         make download -j8
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
+
+    - name: Patch Makefile to skip initramfs
+      run: |
+        cd openwrt
+        # 备份原文件
+        cp target/linux/mediatek/image/Makefile target/linux/mediatek/image/Makefile.bak
+        # 删除 initramfs-factory.ubi 和 initramfs-recovery.itb 相关的规则
+        sed -i '/initramfs-factory\.ubi/d' target/linux/mediatek/image/Makefile
+        sed -i '/initramfs-recovery\.itb/d' target/linux/mediatek/image/Makefile
+        echo "已修补 Makefile，跳过 initramfs 生成"
 
     - name: Compile the firmware
       id: compile
