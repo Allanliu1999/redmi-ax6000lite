@@ -161,25 +161,25 @@ jobs:
       run: |
         VERSION="redmi_ax6000_v$(date +"%s")"
         echo "release_tag=${VERSION}" >> $GITHUB_OUTPUT
-        
+
         cat > release.txt << EOF
         ## 🚀 Redmi AX6000 固件发布
-        
+
         版本号： ${VERSION}
         发布日期： $(TZ='Asia/Shanghai' date +"%Y-%m-%d %H:%M")
         源码分支： openwrt-24.10-6.6
-        
+
         ### 🔧 包含插件
         - luci-app-nikki (Mihomo 代理)
         - luci-app-homeproxy
         - luci-app-turboacc-mtk (硬件加速)
         - luci-app-mtwifi-cfg (闭源WiFi管理)
         - luci-app-eqos-mtk (设备限速)
-        
+
         ### 🇨🇳 国内 opkg 源已配置
         刷机后可直接运行：
         opkg update && opkg upgrade
-        
+
         ### 📝 说明
         - 基于 ImmortalWrt 24.10 闭源驱动
         - 分区类型：ubootmod
