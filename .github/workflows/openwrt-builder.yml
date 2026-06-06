@@ -107,14 +107,6 @@ jobs:
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
-    - name: Patch Makefile to skip initramfs
-      run: |
-        cd openwrt
-        cp target/linux/mediatek/image/Makefile target/linux/mediatek/image/Makefile.bak
-        sed -i '/initramfs-factory\.ubi/d' target/linux/mediatek/image/Makefile
-        sed -i '/initramfs-recovery\.itb/d' target/linux/mediatek/image/Makefile
-        echo "已修补 Makefile，跳过 initramfs 生成"
-
     - name: Compile the firmware
       id: compile
       run: |
@@ -142,6 +134,8 @@ jobs:
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true'
       run: |
         cd openwrt/bin/targets/*/*
+        echo "=== 固件文件列表 ==="
+        ls -lh
         rm -rf packages
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
@@ -160,12 +154,26 @@ jobs:
         VERSION="redmi_ax6000_v$(date +"%s")"
         echo "release_tag=${VERSION}" >> $GITHUB_OUTPUT
 
+        FIRMWARE_DIR="${{ env.FIRMWARE }}"
+        FW_LIST=""
+        if [ -d "$FIRMWARE_DIR" ]; then
+          FW_LIST=$(ls -lh "$FIRMWARE_DIR" 2>/dev/null | grep -v "^total" | grep -v "^d" | awk '{print "  - " $NF " (" $5 ")"}')
+        fi
+
         cat > release.txt << EOF
         ## 🚀 Redmi AX6000 固件发布
 
         版本号： ${VERSION}
         发布日期： $(TZ='Asia/Shanghai' date +"%Y-%m-%d %H:%M")
         源码分支： openwrt-24.10-6.6
+
+        ### 📦 固件文件
+        ${FW_LIST:-  *(编译完成后自动列出)}
+
+        ### 📝 固件说明
+        - **sysupgrade.bin** — 常规升级用（通过 LuCI 或 ssh 刷写）
+        - **initramfs-recovery.itb** — 恢复/救砖用（通过 U-Boot 刷写）
+        - **initramfs-factory.ubi** — 首次刷机/工厂复位用
 
         ### 🔧 包含插件
         - luci-app-nikki (Mihomo 代理)
