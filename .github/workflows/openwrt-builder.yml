@@ -118,25 +118,55 @@ jobs:
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
+    - name: Get next version
+      id: version
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        LATEST_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2> /dev/null || echo "redmi_ax6000_v0")
+        echo "最新 release tag: $LATEST_TAG"
+        LATEST_NUM=$(echo "$LATEST_TAG" | grep -oP 'v\K\d+' || echo "0")
+        echo "最新版本数字: $LATEST_NUM"
+        NEXT_NUM=$((LATEST_NUM + 1))
+        VERSION_TAG="immortalwrt-redmi_ax6000_v${NEXT_NUM}_$(date +"%Y%m%d")"
+        echo "当前生成版本: $VERSION_TAG"
+        echo "release_tag=${VERSION_TAG}" >> $GITHUB_OUTPUT
+        echo "VERSION_TAG=${VERSION_TAG}" >> $GITHUB_ENV
+        echo "VERSION_NUM=v${NEXT_NUM}" >> $GITHUB_ENV
+
     - name: Check space usage
       if: (!cancelled())
       run: df -hT
-
-    - name: Upload bin directory
-      uses: actions/upload-artifact@main
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
-      with:
-        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: openwrt/bin
 
     - name: Organize files
       id: organize
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true'
       run: |
         cd openwrt/bin/targets/*/*
-        echo "=== 固件文件列表 ==="
+        VERSION_NUM="${{ env.VERSION_NUM }}"
+        DATE_TAG=$(date +"%Y%m%d")
+        echo "版本号: ${VERSION_NUM}, 日期: ${DATE_TAG}"
+
+        for f in *; do
+          if [ -f "$f" ]; then
+            case "$f" in
+              *sysupgrade.bin | *initramfs-recovery.itb | *initramfs-factory.ubi)
+                NEW_NAME=$(echo "$f" | sed "s/\.bin$/-${VERSION_NUM}-${DATE_TAG}.bin/" | sed "s/\.itb$/-${VERSION_NUM}-${DATE_TAG}.itb/" | sed "s/\.ubi$/-${VERSION_NUM}-${DATE_TAG}.ubi/")
+                mv "$f" "$NEW_NAME"
+                echo "保留: $NEW_NAME"
+                ;;
+              *)
+                rm -f "$f"
+                echo "删除: $f"
+                ;;
+            esac
+          fi
+        done
+
+        echo "=== 最终固件列表 ==="
         ls -lh
-        rm -rf packages
+        rm -rf packages 2> /dev/null
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
 
@@ -149,26 +179,24 @@ jobs:
 
     - name: Generate release info
       id: tag
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
+      if: steps.organize.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
       run: |
-        VERSION="redmi_ax6000_v$(date +"%s")"
-        echo "release_tag=${VERSION}" >> $GITHUB_OUTPUT
-
+        VERSION_TAG="${{ env.VERSION_TAG }}"
         FIRMWARE_DIR="${{ env.FIRMWARE }}"
+
         FW_LIST=""
         if [ -d "$FIRMWARE_DIR" ]; then
-          FW_LIST=$(ls -lh "$FIRMWARE_DIR" 2>/dev/null | grep -v "^total" | grep -v "^d" | awk '{print "  - " $NF " (" $5 ")"}')
+          FW_LIST=$(ls -lh "$FIRMWARE_DIR" 2> /dev/null | grep -v "^total" | awk '{print "  - " $NF " (" $5 ")"}')
         fi
 
         cat > release.txt << EOF
         ## 🚀 Redmi AX6000 固件发布
 
-        版本号： ${VERSION}
-        发布日期： $(TZ='Asia/Shanghai' date +"%Y-%m-%d %H:%M")
-        源码分支： openwrt-24.10-6.6
+        **版本号：** ${VERSION_TAG}
+        **发布日期：** $(TZ='Asia/Shanghai' date +"%Y-%m-%d %H:%M")
 
         ### 📦 固件文件
-        ${FW_LIST:-  *(编译完成后自动列出)}
+        ${FW_LIST}
 
         ### 📝 固件说明
         - **sysupgrade.bin** — 常规升级用（通过 LuCI 或 ssh 刷写）
@@ -200,12 +228,15 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: ${{ steps.tag.outputs.release_tag }}
+        tag_name: ${{ steps.version.outputs.release_tag }}
+        name: ${{ steps.version.outputs.release_tag }}
         body_path: release.txt
         files: ${{ env.FIRMWARE }}/*
 
-    - name: Delete workflow runs
+    # ---- 编译失败时自动删除本次失败的 Action 记录 ----
+    - name: Delete failed workflow run
+      if: failure() && env.DELETE_FAILED_RUN != 'false'
       uses: Mattraks/delete-workflow-runs@main
       with:
-        retain_days: 30
-        keep_minimum_runs: 5
+        retain_days: 0
+        keep_minimum_runs: 0
