@@ -2,7 +2,7 @@
 # https://github.com/P3TERX/Actions-OpenWrt
 #
 # File: .github/workflows/update-checker.yml
-# Description: Source code update checker
+# Description: Check for new branches and commits in upstream repository
 #
 # Copyright (c) 2019-2024 P3TERX <https://p3terx.com>
 #
@@ -13,47 +13,136 @@
 name: Update Checker
 
 env:
-  REPO_URL: https://github.com/coolsnowwolf/lede
-  REPO_BRANCH: master
+  UPSTREAM_REPO: https://github.com/fucktimi/redmi-ax6000
 
 on:
   workflow_dispatch:
-#  schedule:
-#    - cron: 0 */18 * * *
+  # schedule:
+  #   - cron: '0 0 * * 0'   # 每周日 00:00 自动运行（已注释，如需启用去掉 #）
 
 jobs:
   check:
     runs-on: ubuntu-latest
 
     steps:
+    - name: Checkout
+      uses: actions/checkout@main
 
-    - name: Get Commit Hash
-      id: getHash
+    - name: Fetch upstream branches and commits
+      id: fetchData
       run: |
-        git clone --depth 1 $REPO_URL -b $REPO_BRANCH .
-        echo "commitHash=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+        echo "=== 获取上游仓库分支和最新 commit ==="
+        echo "上游仓库：$UPSTREAM_REPO"
+        echo ""
+        
+        # 获取每个分支的最新 commit
+        git ls-remote --heads $UPSTREAM_REPO | sort -k2 > upstream_refs.txt
+        
+        echo "当前上游分支及最新 commit："
+        echo "分支名 | 最新 Commit"
+        echo "-------|------------"
+        while IFS= read -r line; do
+          COMMIT=$(echo "$line" | awk '{print $1}')
+          BRANCH=$(echo "$line" | awk '{print $2}' | sed 's|refs/heads/||')
+          echo "$BRANCH | $COMMIT"
+        done < upstream_refs.txt
+        
+        # 提取分支名列表
+        awk '{print $2}' upstream_refs.txt | sed 's|refs/heads/||' | sort > upstream_branches.txt
+        echo ""
+        echo "分支数：$(wc -l < upstream_branches.txt)"
 
-    - name: Compare Commit Hash
-      id: cacheHash
+    - name: Compare with cached data
+      id: compareData
+      run: |
+        CHANGES_DETECTED=false
+        NEW_BRANCHES=""
+        UPDATED_BRANCHES=""
+        
+        echo "=== 与上次检查结果比较 ==="
+        
+        # 比较分支列表
+        if [ -f cached_branches.txt ]; then
+          NEW_BRANCHES_LIST=$(comm -13 <(sort cached_branches.txt) <(sort upstream_branches.txt) 2>/dev/null || echo "")
+          if [ -n "$NEW_BRANCHES_LIST" ]; then
+            echo "新增分支："
+            echo "$NEW_BRANCHES_LIST"
+            NEW_BRANCHES="$NEW_BRANCHES_LIST"
+            CHANGES_DETECTED=true
+          else
+            echo "无新增分支"
+          fi
+        else
+          echo "首次运行，无缓存数据"
+        fi
+        
+        # 比较 commit 更新
+        if [ -f cached_refs.txt ]; then
+          while IFS= read -r line; do
+            COMMIT=$(echo "$line" | awk '{print $1}')
+            REF=$(echo "$line" | awk '{print $2}')
+            BRANCH=$(echo "$REF" | sed 's|refs/heads/||')
+            
+            OLD_LINE=$(grep "$REF" cached_refs.txt 2>/dev/null || echo "")
+            if [ -n "$OLD_LINE" ]; then
+              OLD_COMMIT=$(echo "$OLD_LINE" | awk '{print $1}')
+              if [ "$COMMIT" != "$OLD_COMMIT" ]; then
+                echo "分支 $BRANCH 有更新：$OLD_COMMIT -> $COMMIT"
+                UPDATED_BRANCHES="${UPDATED_BRANCHES}${BRANCH} (${OLD_COMMIT} -> ${COMMIT})\n"
+                CHANGES_DETECTED=true
+              fi
+            fi
+          done < upstream_refs.txt
+        else
+          echo "首次运行，无 commit 缓存数据"
+        fi
+        
+        echo "hasChanges=${CHANGES_DETECTED}" >> $GITHUB_OUTPUT
+        echo "newBranches<<EOF" >> $GITHUB_OUTPUT
+        echo "${NEW_BRANCHES:-无}" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+        echo "updatedBranches<<EOF" >> $GITHUB_OUTPUT
+        echo -e "${UPDATED_BRANCHES:-无}" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+        
+        cp upstream_refs.txt cached_refs.txt
+        cp upstream_branches.txt cached_branches.txt
+
+    - name: Cache upstream data
       uses: actions/cache@v3
       with:
-        path: .commitHash
-        key: commitHash_${{ steps.getHash.outputs.commitHash }}
+        path: |
+          cached_refs.txt
+          cached_branches.txt
+        key: upstream_data_${{ hashFiles('upstream_refs.txt') }}
+        restore-keys: |
+          upstream_data_
 
-    - name: Save New Commit Hash
-      if: steps.cacheHash.outputs.cache-hit != 'true'
+    - name: Summary result
+      if: always()
       run: |
-        echo ${{ steps.getHash.outputs.commitHash }} | tee .commitHash
-
-    - name: Trigger build
-      if: steps.cacheHash.outputs.cache-hit != 'true'
-      uses: peter-evans/repository-dispatch@v2
-      with:
-        token: ${{ github.token }}
-        event-type: Source Code Update
+        echo ""
+        echo "========================================"
+        echo " 上游仓库更新检查结果"
+        echo "========================================"
+        echo "检查时间：$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')"
+        echo "上游仓库：$UPSTREAM_REPO"
+        echo ""
+        
+        if [ "${{ steps.compareData.outputs.hasChanges }}" = "true" ]; then
+          echo "✅ 检测到更新！"
+          echo ""
+          echo "【新增分支】"
+          echo "${{ steps.compareData.outputs.newBranches }}"
+          echo ""
+          echo "【commit 更新】"
+          echo -e "${{ steps.compareData.outputs.updatedBranches }}"
+        else
+          echo "❌ 未检测到更新，上游仓库与上次检查一致"
+        fi
 
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@v2
       with:
-        retain_days: 0
-        keep_minimum_runs: 2
+        retain_days: 30
+        keep_minimum_runs: 5
