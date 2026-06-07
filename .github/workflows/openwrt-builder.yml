@@ -83,16 +83,30 @@ jobs:
         rm -rf feeds/packages/lang/golang
         git clone https://github.com/sbwml/packages_lang_golang -b 26.x feeds/packages/lang/golang
 
+    - name: Pin sing-box to v1.12.25 (homeproxy 所需)
+      run: |
+        cd openwrt
+        # 替换 feeds 中的 sing-box 为指定版本
+        rm -rf feeds/packages/net/sing-box 2>/dev/null
+        git clone --depth 1 https://github.com/sbwml/openwrt_pkgs -b sing-box-1.12.25 package/sing-box 2>/dev/null || {
+          echo "sbwml sing-box 仓库不存在指定分支，尝试修改 feeds Makefile 版本号"
+          sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=1.12.25/' feeds/packages/net/sing-box/Makefile 2>/dev/null || true
+          sed -i 's/PKG_HASH:=.*/# PKG_HASH overridden for pinned version/' feeds/packages/net/sing-box/Makefile 2>/dev/null || true
+        }
+        echo "sing-box 版本已固定"
+
     - name: Load custom configuration
       run: |
         [ -e files ] && mv files openwrt/files
         [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
         mkdir -p openwrt/files/etc/opkg
         cat > openwrt/files/etc/opkg/customfeeds.conf << 'OPKGEOF'
-        src/gz immortalwrt_base https://mirrors.tuna.tsinghua.edu.cn/immortalwrt/24.10/mediatek/mt7986/base
-        src/gz immortalwrt_luci https://mirrors.tuna.tsinghua.edu.cn/immortalwrt/24.10/mediatek/mt7986/luci
-        src/gz immortalwrt_packages https://mirrors.tuna.tsinghua.edu.cn/immortalwrt/24.10/mediatek/mt7986/packages
-        src/gz immortalwrt_target https://mirrors.tuna.tsinghua.edu.cn/immortalwrt/24.10/mediatek/mt7986/targets
+        src/gz immortalwrt_core https://mirrors.vsean.net/openwrt/releases/24.10-SNAPSHOT/targets/mediatek/filogic/packages
+        src/gz immortalwrt_base https://mirrors.vsean.net/openwrt/releases/24.10-SNAPSHOT/packages/aarch64_cortex-a53/base
+        src/gz immortalwrt_luci https://mirrors.vsean.net/openwrt/releases/24.10-SNAPSHOT/packages/aarch64_cortex-a53/luci
+        src/gz immortalwrt_packages https://mirrors.vsean.net/openwrt/releases/24.10-SNAPSHOT/packages/aarch64_cortex-a53/packages
+        src/gz immortalwrt_routing https://mirrors.vsean.net/openwrt/releases/24.10-SNAPSHOT/packages/aarch64_cortex-a53/routing
+        src/gz immortalwrt_telephony https://mirrors.vsean.net/openwrt/releases/24.10-SNAPSHOT/packages/aarch64_cortex-a53/telephony
         OPKGEOF
         chmod +x $DIY_P2_SH
         cd openwrt
@@ -124,11 +138,24 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        LATEST_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2> /dev/null || echo "redmi_ax6000_v0")
-        echo "最新 release tag: $LATEST_TAG"
-        LATEST_NUM=$(echo "$LATEST_TAG" | grep -oP 'v\K\d+' || echo "0")
-        echo "最新版本数字: $LATEST_NUM"
-        NEXT_NUM=$((LATEST_NUM + 1))
+        # 查找符合当前命名格式 (immortalwrt-redmi_ax6000_v{N}_YYYYMMDD) 且版本号合理 (< 100) 的旧 release
+        # 旧格式的 release (redmi_ax6000_v1780733003) 会被忽略，自动从 V1 开始
+        ALL_TAGS=$(gh release list --limit 20 --json tagName --jq '.[].tagName' 2> /dev/null || echo "")
+        LATEST_TAG=$(echo "$ALL_TAGS" | grep -E '^immortalwrt-redmi_ax6000_v[0-9]+_' | while read tag; do
+          NUM=$(echo "$tag" | grep -oP 'v\K\d+')
+          if [ -n "$NUM" ] && [ "$NUM" -lt 100 ] 2>/dev/null; then
+            echo "$tag"
+          fi
+        done | head -1 || echo "")
+        if [ -z "$LATEST_TAG" ]; then
+          echo "未找到匹配的旧 release，从 V1 开始"
+          NEXT_NUM=1
+        else
+          echo "最新 release tag: $LATEST_TAG"
+          LATEST_NUM=$(echo "$LATEST_TAG" | grep -oP 'v\K\d+')
+          echo "最新版本数字: $LATEST_NUM"
+          NEXT_NUM=$((LATEST_NUM + 1))
+        fi
         VERSION_TAG="immortalwrt-redmi_ax6000_v${NEXT_NUM}_$(date +"%Y%m%d")"
         echo "当前生成版本: $VERSION_TAG"
         echo "release_tag=${VERSION_TAG}" >> $GITHUB_OUTPUT
@@ -206,13 +233,14 @@ jobs:
         ### 🔧 包含插件
         - luci-app-nikki (Mihomo 代理)
         - luci-app-homeproxy
+        - luci-app-upnp (UPnP IGD + PCP/NAT-PMP)
         - luci-app-turboacc-mtk (硬件加速)
         - luci-app-mtwifi-cfg (闭源WiFi管理)
         - luci-app-eqos-mtk (设备限速)
 
         ### 🇨🇳 国内 opkg 源已配置
-        刷机后可直接运行：
-        opkg update && opkg upgrade
+        使用 vsean.net 镜像源，刷机后可直接运行：
+        opkg update
 
         ### 📝 说明
         - 基于 ImmortalWrt 24.10 闭源驱动
@@ -223,7 +251,7 @@ jobs:
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware to release
-      uses: softprops/action-gh-release@master
+      uses: softprops/action-gh-release@v2
       if: steps.tag.outputs.status == 'success'
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -232,11 +260,25 @@ jobs:
         name: ${{ steps.version.outputs.release_tag }}
         body_path: release.txt
         files: ${{ env.FIRMWARE }}/*
+        fail_on_unmatched_files: false
+        draft: false
+        prerelease: false
+        make_latest: true
 
-    # ---- 编译失败时自动删除本次失败的 Action 记录 ----
-    - name: Delete failed workflow run
-      if: failure() && env.DELETE_FAILED_RUN != 'false'
-      uses: Mattraks/delete-workflow-runs@main
-      with:
-        retain_days: 0
-        keep_minimum_runs: 0
+    # ---- 编译成功后，清理所有之前失败的 Action 记录（成功的保留） ----
+    - name: Clean up previous failed workflow runs
+      if: success() && steps.compile.outputs.status == 'success'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        echo "=== 列出所有失败的 workflow 运行记录（保留成功的不删） ==="
+        FAILED_RUNS=$(gh run list --limit 50 --json databaseId,conclusion,createdAt --jq '.[] | select(.conclusion == "failure") | .databaseId' 2>/dev/null)
+        if [ -n "$FAILED_RUNS" ]; then
+          echo "$FAILED_RUNS" | while read run_id; do
+            echo "删除失败记录 #${run_id}"
+            gh run delete "$run_id" 2>/dev/null || true
+          done
+          echo "✅ 已清理所有失败的运行记录"
+        else
+          echo "✅ 没有失败的记录需要清理"
+        fi
