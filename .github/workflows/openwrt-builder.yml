@@ -197,15 +197,19 @@ jobs:
         ls -lh
         echo ""
 
-        # 第1步：重命名固件文件（.bin/.itb/.ubi），记录文件名
-        FW_FILES=""
+        # 第1步：只保留目标设备的 3 个固件文件，精确匹配
+        # 设备标识：xiaomi_redmi-router-ax6000-ubootmod
+        # 三种类型：sysupgrade.bin / initramfs-recovery.itb / initramfs-factory.ubi
+        DEVICE_PATTERN="xiaomi_redmi-router-ax6000-ubootmod"
+
+        FW_LIST=""
         for f in *; do
           if [ -f "$f" ]; then
             case "$f" in
-              *.bin | *.itb | *.ubi)
+              *"${DEVICE_PATTERN}"*)
                 NEW_NAME=$(echo "$f" | sed "s/\.bin$/-${VERSION_NUM}-${DATE_TAG}.bin/" | sed "s/\.itb$/-${VERSION_NUM}-${DATE_TAG}.itb/" | sed "s/\.ubi$/-${VERSION_NUM}-${DATE_TAG}.ubi/")
                 mv "$f" "$NEW_NAME"
-                FW_FILES="${FW_FILES} ${NEW_NAME}"
+                FW_LIST="${FW_LIST} ${NEW_NAME}"
                 echo "保留固件: $NEW_NAME"
                 ;;
               *)
@@ -219,33 +223,47 @@ jobs:
         # 第2步：删除所有非固件子目录（如 u-boot-*, trusted-firmware-*, packages 等）
         for d in */; do
           [ -d "$d" ] || continue
-          case "$d" in
-            packages/) rm -rf "$d" && echo "删除目录: $d" ;;
-            u-boot-* | trusted-firmware-*) rm -rf "$d" && echo "删除目录: $d" ;;
-            *) rm -rf "$d" && echo "删除目录: $d" ;;
-          esac
+          rm -rf "$d"
+          echo "删除目录: $d"
         done
 
         echo ""
         echo "=== 最终固件列表 ==="
         ls -lh
 
-        # 第3步：检查是否正好有 3 个固件文件
-        FW_COUNT=$(ls *.bin *.itb *.ubi 2>/dev/null | wc -l)
-        echo "固件文件数: ${FW_COUNT}"
-        if [ "${FW_COUNT}" -lt 2 ]; then
+        # 第3步：验证固件文件数
+        FW_COUNT=$(ls -1 2>/dev/null | wc -l)
+        echo "最终文件数: ${FW_COUNT}"
+        if [ "${FW_COUNT}" -lt 3 ]; then
           echo "⚠️ 警告：固件文件数不足，可能存在编译问题"
         fi
 
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
 
-    - name: Upload firmware directory
+    - name: Upload sysupgrade artifact
       uses: actions/upload-artifact@main
       if: steps.organize.outputs.status == 'success'
       with:
-        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: ${{ env.FIRMWARE }}
+        name: sysupgrade
+        path: ${{ env.FIRMWARE }}/*sysupgrade*.bin
+        if-no-files-found: error
+
+    - name: Upload initramfs-recovery artifact
+      uses: actions/upload-artifact@main
+      if: steps.organize.outputs.status == 'success'
+      with:
+        name: initramfs-recovery
+        path: ${{ env.FIRMWARE }}/*recovery*.itb
+        if-no-files-found: error
+
+    - name: Upload initramfs-factory artifact
+      uses: actions/upload-artifact@main
+      if: steps.organize.outputs.status == 'success'
+      with:
+        name: initramfs-factory
+        path: ${{ env.FIRMWARE }}/*factory*.ubi
+        if-no-files-found: error
 
     - name: Generate release info
       id: tag
