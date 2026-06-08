@@ -11,6 +11,7 @@ permissions:
   contents: write
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-6.6
   REPO_BRANCH: openwrt-24.10-6.6
   FEEDS_CONF: feeds.conf.default
@@ -192,25 +193,50 @@ jobs:
         DATE_TAG=$(date +"%Y%m%d")
         echo "版本号: ${VERSION_NUM}, 日期: ${DATE_TAG}"
 
+        echo "=== 编译输出的所有内容 ==="
+        ls -lh
+        echo ""
+
+        # 第1步：重命名固件文件（.bin/.itb/.ubi），记录文件名
+        FW_FILES=""
         for f in *; do
           if [ -f "$f" ]; then
             case "$f" in
-              *sysupgrade.bin | *initramfs-recovery.itb | *initramfs-factory.ubi)
+              *.bin | *.itb | *.ubi)
                 NEW_NAME=$(echo "$f" | sed "s/\.bin$/-${VERSION_NUM}-${DATE_TAG}.bin/" | sed "s/\.itb$/-${VERSION_NUM}-${DATE_TAG}.itb/" | sed "s/\.ubi$/-${VERSION_NUM}-${DATE_TAG}.ubi/")
                 mv "$f" "$NEW_NAME"
-                echo "保留: $NEW_NAME"
+                FW_FILES="${FW_FILES} ${NEW_NAME}"
+                echo "保留固件: $NEW_NAME"
                 ;;
               *)
                 rm -f "$f"
-                echo "删除: $f"
+                echo "删除杂物文件: $f"
                 ;;
             esac
           fi
         done
 
+        # 第2步：删除所有非固件子目录（如 u-boot-*, trusted-firmware-*, packages 等）
+        for d in */; do
+          [ -d "$d" ] || continue
+          case "$d" in
+            packages/) rm -rf "$d" && echo "删除目录: $d" ;;
+            u-boot-* | trusted-firmware-*) rm -rf "$d" && echo "删除目录: $d" ;;
+            *) rm -rf "$d" && echo "删除目录: $d" ;;
+          esac
+        done
+
+        echo ""
         echo "=== 最终固件列表 ==="
         ls -lh
-        rm -rf packages 2> /dev/null
+
+        # 第3步：检查是否正好有 3 个固件文件
+        FW_COUNT=$(ls *.bin *.itb *.ubi 2>/dev/null | wc -l)
+        echo "固件文件数: ${FW_COUNT}"
+        if [ "${FW_COUNT}" -lt 2 ]; then
+          echo "⚠️ 警告：固件文件数不足，可能存在编译问题"
+        fi
+
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
 
@@ -268,7 +294,7 @@ jobs:
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware to release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       if: steps.tag.outputs.status == 'success'
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
